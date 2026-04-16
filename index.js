@@ -9,25 +9,26 @@ const cfg = {
     port: process.env.PORT || 3000,
     token: process.env.TOKEN,
     guildId: process.env.GUILD_ID,
-    roleId: process.env.ROLE_ID
+    roles: process.env.ROLES ? process.env.ROLES.split(',') : []
 }
 
-app.get('/', (req, res) => res.sendStatus(200))
+app.get('/', (q, s) => s.sendStatus(200))
 
-app.get('/check', async (req, res) => {
-    const id = req.query.id
-    if (!id) return res.json({ r: false })
+app.get('/check', async (q, s) => {
+    const id = q.query.id
+    if (!id) return s.json({ r: false })
 
     try {
         const { data } = await axios.get(`https://registry.rover.link/api/guilds/${cfg.guildId}/roblox-to-discord/${id}`)
-        if (!data.discordUsers || !data.discordUsers[0]) return res.json({ r: false })
+        if (!data.discordUsers?.length) return s.json({ r: false })
 
         const g = await client.guilds.fetch(cfg.guildId)
         const m = await g.members.fetch(data.discordUsers[0].user.id)
         
-        res.json({ r: m.roles.cache.has(cfg.roleId) })
+        const ok = cfg.roles.some(r => m.roles.cache.has(r.trim()))
+        s.json({ r: ok })
     } catch {
-        res.json({ r: false })
+        s.json({ r: false })
     }
 })
 
