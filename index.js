@@ -12,52 +12,71 @@ const cfg = {
     port: process.env.PORT || 3000
 }
 
-let cmds = []
+let q = []
+let bnd = new Map()
 
-app.get('/', (q, s) => s.sendStatus(200))
+app.get('/', (req, res) => res.sendStatus(200))
 
-app.get('/poll', (q, s) => {
-    if (q.query.key !== cfg.key) return s.status(401).send()
-    const lastSync = parseInt(q.query.ts) || 0
-    s.json({ c: cmds.filter(c => c.ts > lastSync), ts: Date.now() })
+app.get('/poll', (req, res) => {
+    if (req.query.key !== cfg.key) return res.status(401).send()
+    const ts = parseInt(req.query.ts) || 0
+    res.json({ c: q.filter(x => x.ts > ts), ts: Date.now() })
 })
 
 setInterval(() => {
-    cmds = cmds.filter(c => Date.now() - c.ts < 60000)
+    const n = Date.now()
+    q = q.filter(x => n - x.ts < 60000)
 }, 10000)
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds] })
 
-const commands = [
-    new SlashCommandBuilder().setName('kill').setDescription('Kill player').addStringOption(o => o.setName('target').setDescription('Player name').setRequired(true)),
-    new SlashCommandBuilder().setName('re').setDescription('Respawn player').addStringOption(o => o.setName('target').setDescription('Player name').setRequired(true)),
-    new SlashCommandBuilder().setName('r6').setDescription('R6 player').addStringOption(o => o.setName('target').setDescription('Player name').setRequired(true)),
-    new SlashCommandBuilder().setName('exe').setDescription('Execute code (All servers)').addStringOption(o => o.setName('code').setDescription('Lua code').setRequired(true))
+const cmds = [
+    new SlashCommandBuilder().setName('bind').setDescription('Bind').addStringOption(o => o.setName('name').setRequired(true)),
+    new SlashCommandBuilder().setName('kill').setDescription('Kill'),
+    new SlashCommandBuilder().setName('re').setDescription('Respawn'),
+    new SlashCommandBuilder().setName('r6').setDescription('R6'),
+    new SlashCommandBuilder().setName('exe').setDescription('Global script').addStringOption(o => o.setName('code').setRequired(true)),
+    new SlashCommandBuilder().setName('exe_at').setDescription('Target script').addStringOption(o => o.setName('target').setRequired(true)).addStringOption(o => o.setName('code').setRequired(true))
 ].map(c => c.toJSON())
 
-const rest = new REST({ version: '10' }).setToken(cfg.token)
-
 client.once('ready', async () => {
-    await rest.put(Routes.applicationGuildCommands(cfg.clientId, cfg.guildId), { body: commands })
+    const rest = new REST({ version: '10' }).setToken(cfg.token)
+    await rest.put(Routes.applicationGuildCommands(cfg.clientId, cfg.guildId), { body: cmds })
 })
 
 client.on('interactionCreate', async i => {
     if (!i.isChatInputCommand()) return
-    
-    const hasAccess = i.member.roles.cache.has(cfg.roleAccess)
-    const hasStaff = i.member.roles.cache.has(cfg.roleStaff)
 
-    if (!hasAccess && !hasStaff) return i.reply({ content: 'Denied', ephemeral: true })
+    const st = i.member.roles.cache.has(cfg.roleStaff)
+    const ac = i.member.roles.cache.has(cfg.roleAccess)
+
+    if (!ac && !st) return i.reply({ content: 'Denied', ephemeral: true })
+
+    if (i.commandName === 'bind') {
+        const n = i.options.getString('name')
+        for (let [k, v] of bnd.entries()) if (v === n) bnd.delete(k)
+        bnd.set(i.user.id, n)
+        return i.reply(`Bound: **${n}**`)
+    }
+
+    if (i.commandName === 'exe_at') {
+        const t = i.options.getString('target')
+        const c = i.options.getString('code')
+        q.push({ c: 'EXE', a: c, t: t, ts: Date.now() })
+        return i.reply(`Injected code for **${t}**`)
+    }
 
     if (i.commandName === 'exe') {
-        if (!hasStaff) return i.reply({ content: 'Requires Staff Access', ephemeral: true })
-        cmds.push({ cmd: 'EXE', arg: i.options.getString('code'), tgt: null, ts: Date.now() })
-        await i.reply('Code executed on all active servers.')
-    } else {
-        const tgt = i.options.getString('target')
-        cmds.push({ cmd: i.commandName.toUpperCase(), arg: null, tgt: tgt, ts: Date.now() })
-        await i.reply(`${i.commandName.toUpperCase()} sent for ${tgt}.`)
+        if (!st) return i.reply({ content: 'Staff only', ephemeral: true })
+        q.push({ c: 'EXE', a: i.options.getString('code'), t: 'ALL', ts: Date.now() })
+        return i.reply('Global execution sent.')
     }
+
+    const b = bnd.get(i.user.id)
+    if (!b) return i.reply({ content: 'Bind first', ephemeral: true })
+
+    q.push({ c: i.commandName.toUpperCase(), a: null, t: b, ts: Date.now() })
+    await i.reply(`${i.commandName.toUpperCase()} -> **${b}**`)
 })
 
 client.login(cfg.token)
